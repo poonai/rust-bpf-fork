@@ -1,5 +1,5 @@
 # This is a friendly fork for my personal use
-Some of the apis are not updated for the recent bcc api's so, I have updated myself for my use. If you interseted in using this crate free feel to use. All credits goes to the original author.
+Some of the apis are not updated for the recent bcc api so, I have updated myself for my use. If you interseted in using this crate, free feel to use. All credits goes to the original author.
 Source repository [https://github.com/rust-bpf/rust-bcc]
 # rust-bcc
 
