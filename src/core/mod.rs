@@ -1,9 +1,9 @@
 mod uprobe;
 
-use failure::Error;
-use bcc_sys::bccapi::*;
 use bcc_sys::bccapi::bpf_probe_attach_type_BPF_PROBE_ENTRY as BPF_PROBE_ENTRY;
 use bcc_sys::bccapi::bpf_probe_attach_type_BPF_PROBE_RETURN as BPF_PROBE_RETURN;
+use bcc_sys::bccapi::*;
+use failure::Error;
 
 use self::uprobe::Uprobe;
 use table::Table;
@@ -28,36 +28,30 @@ pub struct BPF {
 pub struct Kprobe {
     code_fd: File,
     name: CString,
-    p: MutPointer,
+    p: i32,
 }
 
 impl Kprobe {
     fn new(name: &str, attach_type: u32, function: &str, code: File) -> Result<Self, Error> {
-        let cname = CString::new(name).map_err(|_| {
-            format_err!("Nul byte in Kprobe name: {}", name)
-        })?;
-        let cfunction = CString::new(function).map_err(|_| {
-            format_err!("Nul byte in Kprobe function: {}", function)
-        })?;
+        let cname =
+            CString::new(name).map_err(|_| format_err!("Nul byte in Kprobe name: {}", name))?;
+        let cfunction = CString::new(function)
+            .map_err(|_| format_err!("Nul byte in Kprobe function: {}", function))?;
         let (pid, cpu, group_fd) = (-1, 0, -1);
-        let ptr = unsafe {
+        let res = unsafe {
             bpf_attach_kprobe(
                 code.as_raw_fd(),
                 attach_type,
                 cname.as_ptr(),
                 cfunction.as_ptr(),
-                pid,
-                cpu,
-                group_fd,
-                None,
-                ptr::null_mut(),
+                0,
             )
         };
-        if ptr.is_null() {
+        if res < 0 {
             Err(format_err!("Failed to attach Kprobe: {}", name))
         } else {
             Ok(Self {
-                p: ptr,
+                p: res,
                 name: cname,
                 code_fd: code,
             })
@@ -104,43 +98,31 @@ pub struct Tracepoint {
     subsys: CString,
     name: CString,
     code_fd: File,
-    p: MutPointer,
+    p: i32,
 }
 
 impl Tracepoint {
-    pub fn attach_tracepoint(
-        subsys: &str,
-        name: &str,
-        file: File,
-    ) -> Result<Self, Error> {
-        let cname = CString::new(name).map_err(|_| {
-            format_err!("Nul byte in Tracepoint name: {}", name)
-        })?;
-        let csubsys = CString::new(subsys).map_err(|_| {
-            format_err!("Nul byte in Tracepoint subsys: {}", subsys)
-        })?;
+    pub fn attach_tracepoint(subsys: &str, name: &str, file: File) -> Result<Self, Error> {
+        let cname =
+            CString::new(name).map_err(|_| format_err!("Nul byte in Tracepoint name: {}", name))?;
+        let csubsys = CString::new(subsys)
+            .map_err(|_| format_err!("Nul byte in Tracepoint subsys: {}", subsys))?;
         // NOTE: BPF events are system-wide and do not support CPU filter
         let (pid, cpu, group_fd) = (-1, 0, -1);
-        let ptr = unsafe {
-            bpf_attach_tracepoint(
-                file.as_raw_fd(),
-                csubsys.as_ptr(),
-                cname.as_ptr(),
-                pid,
-                cpu,
-                group_fd,
-                None,
-                ptr::null_mut(),
-            )
-        };
-        if ptr.is_null() {
-            return Err(format_err!("Failed to attach tracepoint: {}:{}", subsys, name));
+        let res =
+            unsafe { bpf_attach_tracepoint(file.as_raw_fd(), csubsys.as_ptr(), cname.as_ptr()) };
+        if res < 0 {
+            return Err(format_err!(
+                "Failed to attach tracepoint: {}:{}",
+                subsys,
+                name
+            ));
         } else {
-            Ok(Self{
+            Ok(Self {
                 subsys: csubsys,
                 name: cname,
                 code_fd: file,
-                p: ptr,
+                p: res,
             })
         }
     }
@@ -170,17 +152,17 @@ impl Drop for Tracepoint {
 }
 
 fn make_alphanumeric(s: &str) -> String {
-    s.replace(|c| {
-        !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
-    }, "_")
+    s.replace(
+        |c| !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')),
+        "_",
+    )
 }
 
 impl BPF {
     /// `code` is a string containing C code. See https://github.com/iovisor/bcc for examples
     pub fn new(code: &str) -> Result<BPF, Error> {
         let cs = CString::new(code)?;
-        let ptr =
-            unsafe { bpf_module_create_c_from_string(cs.as_ptr(), 2, ptr::null_mut(), 0) };
+        let ptr = unsafe { bpf_module_create_c_from_string(cs.as_ptr(), 2, ptr::null_mut(), 0) };
         if ptr.is_null() {
             return Err(format_err!("couldn't create BPF program"));
         }

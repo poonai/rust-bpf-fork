@@ -1,15 +1,15 @@
 extern crate libc;
+use bcc_sys::bccapi::*;
+use byteorder::{NativeEndian, WriteBytesExt};
+use cpuonline;
 use failure::Error;
 use failure::ResultExt;
-use byteorder::{NativeEndian, WriteBytesExt};
-use bcc_sys::bccapi::*;
-use cpuonline;
 
 use std;
 use std::io::Cursor;
 
-use types::*;
 use table::Table;
+use types::*;
 
 struct PerfCallback {
     raw_cb: Box<FnMut(&[u8]) + Send>,
@@ -21,9 +21,7 @@ unsafe extern "C" fn raw_callback(pc: MutPointer, ptr: MutPointer, size: i32) {
     let slice = std::slice::from_raw_parts(ptr as *const u8, size as usize);
     // prevent unwinding into C code
     // no custom panic hook set, panic will be printed as is
-    let _ = std::panic::catch_unwind(|| {
-        (*(*(pc as *mut PerfCallback)).raw_cb)(slice)
-    });
+    let _ = std::panic::catch_unwind(|| (*(*(pc as *mut PerfCallback)).raw_cb)(slice));
 }
 
 // need this to be represented in memory as just a pointer!!
@@ -52,11 +50,11 @@ pub struct PerfMap {
     readers: Vec<PerfReader>,
     callbacks: Vec<Box<PerfCallback>>,
 }
-
-pub fn init_perf_map<F>(mut table: Table, cb: F) -> Result<PerfMap, Error>
-where
-    F: Fn() -> Box<FnMut(&[u8]) + Send>,
-{
+unsafe impl Send for PerfMap {}
+pub fn init_perf_map(
+    mut table: Table,
+    cb: Box<Fn() -> Box<FnMut(&[u8]) + Send>>,
+) -> Result<PerfMap, Error> {
     let fd = table.fd();
     let key_size = table.key_size();
     let leaf_size = table.leaf_size();
@@ -80,16 +78,16 @@ where
             callbacks.push(callback);
 
             cur.write_u32::<NativeEndian>(perf_fd)?;
-            table.set(&mut key, &mut cur.get_mut()).context(
-                "Unable to initialize perf map",
-            )?;
+            table
+                .set(&mut key, &mut cur.get_mut())
+                .context("Unable to initialize perf map")?;
             let r = bpf_get_next_key(
                 fd,
                 key.as_mut_ptr() as MutPointer,
                 key.as_mut_ptr() as MutPointer,
             );
             if r != 0 {
-                return Err(format_err!("todo: oh no"));
+                break;
             }
             cur.set_position(0);
         }
@@ -131,5 +129,10 @@ fn open_perf_buffer(
     if reader.is_null() {
         return Err(format_err!("failed to open perf buffer"));
     }
-    Ok((PerfReader { ptr: reader as *mut perf_reader }, callback))
+    Ok((
+        PerfReader {
+            ptr: reader as *mut perf_reader,
+        },
+        callback,
+    ))
 }
